@@ -16,6 +16,7 @@ from apiheal.core.run_store import RunStore
 from apiheal.core.worktree import IsolatedWorktree
 from apiheal.detection.inventory import inventory, safe_path
 from apiheal.detection.python_cst import RULE, SourceAnalysis, analyze_source, read_source
+from apiheal.detection.versions import apply_versions, declared_requirements
 from apiheal.diagnosis.gemini_auth import diagnose_gemini
 from apiheal.integrations.github import pr_body, publish
 from apiheal.repair.dependency_edit import TARGET_OPENAI, migrate_requirements
@@ -40,6 +41,7 @@ def _scan(result: RunResult, repository: Path, store: RunStore) -> dict[str, Sou
             continue
         analyses[relative] = analysis
         result.findings.extend(analysis.findings)
+    apply_versions(result.findings, declared_requirements(root, result.repository))
     return analyses
 
 

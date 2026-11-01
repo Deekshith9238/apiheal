@@ -431,8 +431,8 @@ def analyze_source(source: str, file: str) -> SourceAnalysis:
                 file=file,
                 span=span,
                 message=(
-                    f"{name} (langchain-google-vertexai) is deprecated and scheduled for "
-                    f"removal; use {replacement} from langchain-google-genai>=4.0.0, which "
+                    f"{name} (langchain-google-vertexai) is deprecated since 3.2.0 and removed "
+                    f"in 4.0.0; use {replacement} from langchain-google-genai>=4.0.0, which "
                     "reaches Vertex AI with vertexai=True, project, and location."
                 ),
                 evidence=[f"Resolved imported class: {LANGCHAIN_MODULE}.{name}"],
