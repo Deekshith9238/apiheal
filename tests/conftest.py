@@ -30,16 +30,17 @@ def repository(tmp_path: Path) -> Path:
 def candidate_run(repository, tmp_path):
     store = RunStore(tmp_path / "runs")
     with IsolatedWorktree(repository) as baseline, IsolatedWorktree(repository) as candidate:
-        source = (baseline.path / "app.py").read_text()
+        # Bytes, as in the orchestrator: CRLF checkouts must not be normalized.
+        source = (baseline.path / "app.py").read_bytes().decode("utf-8")
         analysis = analyze_source(source, "app.py")
-        requirements = (baseline.path / "requirements.txt").read_text()
+        requirements = (baseline.path / "requirements.txt").read_bytes().decode("utf-8")
         changes = {
             "app.py": (source, analysis.migrated_source),
             "requirements.txt": (requirements, migrate_requirements(requirements)),
         }
         patch, diff = Policy().validate_changes(baseline.base_commit, changes, set(changes))
         for name, (_, updated) in changes.items():
-            (candidate.path / name).write_text(updated, encoding="utf-8", newline="\n")
+            (candidate.path / name).write_bytes(updated.encode("utf-8"))
         result = RunResult(
             command="repair",
             repository=RepositorySnapshot(
