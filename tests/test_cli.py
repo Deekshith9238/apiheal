@@ -36,6 +36,7 @@ def test_scan_returns_typed_findings_without_execution(repository, tmp_path):
     result = json.loads(response.stdout)
     assert result["schema_version"] == 1 and result["outcome"] == "findings"
     assert result["findings"][0]["span"]["line"] == 8
+    assert result["message"].startswith("Found 1 deprecated or legacy AI API usage.")
     assert result["repository"]["base_commit"]
     assert not is_dirty(repository)
 

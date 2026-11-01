@@ -50,10 +50,16 @@ def scan(repository: Path, store: RunStore) -> RunResult:
         result.outcome = Outcome.FINDINGS
     elif result.repository.warnings or result.repository.skipped:
         result.outcome = Outcome.UNSUPPORTED
-    result.message = (
-        f"Found {len(result.findings)} supported/unsupported SDK migration patterns. "
-        "Static scan only; this does not establish runtime failure."
+    usages = sum(f.rule_id != "python-analysis" for f in result.findings)
+    unreadable = len(result.findings) - usages
+    summary = (
+        f"Found {usages} deprecated or legacy AI API usage{'' if usages == 1 else 's'}."
+        if usages
+        else "No deprecated or legacy AI API usages found."
     )
+    if unreadable:
+        summary += f" {unreadable} file{'' if unreadable == 1 else 's'} could not be analyzed."
+    result.message = f"{summary} Static scan only; this does not establish runtime failure."
     result.finished_at = utcnow()
     store.save(result)
     return result
