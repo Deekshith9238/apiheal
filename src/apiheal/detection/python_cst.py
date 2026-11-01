@@ -23,6 +23,15 @@ from apiheal.core.models import Finding, Span
 
 OPENAI_DOC = "https://developers.openai.com/api/reference/python"
 GEMINI_DOC = "https://ai.google.dev/gemini-api/docs/libraries"
+LANGCHAIN_DOC = "https://github.com/langchain-ai/langchain-google/discussions/1422"
+LANGCHAIN_RULE = "langchain-vertexai-deprecated"
+LANGCHAIN_MODULE = "langchain_google_vertexai"
+# Deprecated with the langchain-google-genai 4.0.0 release (announced 2025-12-08).
+LANGCHAIN_REPLACEMENTS = {
+    "ChatVertexAI": "ChatGoogleGenerativeAI",
+    "VertexAI": "GoogleGenerativeAI",
+    "VertexAIEmbeddings": "GoogleGenerativeAIEmbeddings",
+}
 RULE = "openai-legacy-completions"
 TARGETS = {
     "openai.ChatCompletion.create": RULE,
@@ -75,6 +84,7 @@ class SDKVisitor(cst.CSTVisitor):
     def __init__(self):
         self.calls: list[CallSite] = []
         self.gemini: list[Span] = []
+        self.langchain: list[tuple[str, Span]] = []
 
     def visit_Call(self, node: cst.Call) -> None:
         names = self.get_metadata(QualifiedNameProvider, node.func, set())
@@ -112,10 +122,11 @@ class SDKVisitor(cst.CSTVisitor):
         if any(
             cst.helpers.get_full_name_for_node(a.name) == "google.generativeai" for a in node.names
         ):
-            self._gemini_span(node)
+            self.gemini.append(self._span(node))
 
     def visit_ImportFrom(self, node: cst.ImportFrom) -> None:
-        module = cst.helpers.get_full_name_for_node(node.module)
+        # Relative imports have no module and never name an installed SDK.
+        module = cst.helpers.get_full_name_for_node(node.module) if node.module else None
         if module == "google.generativeai" or (
             module == "google"
             and not isinstance(node.names, cst.ImportStar)
@@ -123,18 +134,39 @@ class SDKVisitor(cst.CSTVisitor):
                 cst.helpers.get_full_name_for_node(a.name) == "generativeai" for a in node.names
             )
         ):
-            self._gemini_span(node)
+            self.gemini.append(self._span(node))
+        if _langchain_module(module) and not isinstance(node.names, cst.ImportStar):
+            for alias in node.names:
+                name = cst.helpers.get_full_name_for_node(alias.name)
+                if name in LANGCHAIN_REPLACEMENTS:
+                    self.langchain.append((name, self._span(node)))
 
-    def _gemini_span(self, node: cst.CSTNode) -> None:
+    def visit_Attribute(self, node: cst.Attribute) -> None:
+        # Module-style use, e.g. `import langchain_google_vertexai as lgv; lgv.ChatVertexAI`.
+        for qualified in self.get_metadata(QualifiedNameProvider, node, set()):
+            module, _, name = qualified.name.rpartition(".")
+            if (
+                qualified.source == QualifiedNameSource.IMPORT
+                and name in LANGCHAIN_REPLACEMENTS
+                and _langchain_module(module)
+            ):
+                self.langchain.append((name, self._span(node)))
+                return
+
+    def _span(self, node: cst.CSTNode) -> Span:
         pos = self.get_metadata(PositionProvider, node)
-        self.gemini.append(
-            Span(
-                line=pos.start.line,
-                column=pos.start.column,
-                end_line=pos.end.line,
-                end_column=pos.end.column,
-            )
+        return Span(
+            line=pos.start.line,
+            column=pos.start.column,
+            end_line=pos.end.line,
+            end_column=pos.end.column,
         )
+
+
+def _langchain_module(module: str | None) -> bool:
+    return module is not None and (
+        module == LANGCHAIN_MODULE or module.startswith(f"{LANGCHAIN_MODULE}.")
+    )
 
 
 def _unique_name(base: str, names: set[str]) -> str:
@@ -385,6 +417,26 @@ def analyze_source(source: str, file: str) -> SourceAnalysis:
                 span=span,
                 message="Legacy Gemini SDK import found; automatic migration is not yet supported.",
                 documentation=GEMINI_DOC,
+            )
+        )
+    for name, span in visitor.langchain:
+        replacement = LANGCHAIN_REPLACEMENTS[name]
+        result.findings.append(
+            Finding(
+                # Several deprecated classes can share one import line.
+                id=finding_id(f"{LANGCHAIN_RULE}.{name}", file, span.line),
+                rule_id=LANGCHAIN_RULE,
+                provider="langchain",
+                category="deprecation",
+                file=file,
+                span=span,
+                message=(
+                    f"{name} (langchain-google-vertexai) is deprecated and scheduled for "
+                    f"removal; use {replacement} from langchain-google-genai>=4.0.0, which "
+                    "reaches Vertex AI with vertexai=True, project, and location."
+                ),
+                evidence=[f"Resolved imported class: {LANGCHAIN_MODULE}.{name}"],
+                documentation=LANGCHAIN_DOC,
             )
         )
     return result

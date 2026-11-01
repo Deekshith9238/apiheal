@@ -61,6 +61,12 @@ wrappers, complex response handling, test/build edits, and other dependency layo
 manual review. The scanner also reports legacy embeddings/completions and Gemini imports.
 Finding a legacy pattern is not evidence of an actual runtime outage.
 
+The scanner also flags the LangChain classes deprecated with `langchain-google-genai` 4.0.0
+(rule `langchain-vertexai-deprecated`): `ChatVertexAI`, `VertexAI`, and `VertexAIEmbeddings`
+from `langchain-google-vertexai`, with their `langchain-google-genai` replacements. This rule
+is detection-only; other `langchain-google-vertexai` features remain supported and are not
+reported. See `rules/langchain-vertexai-deprecated.json` for its source and limitations.
+
 Gemini diagnosis uses supplied sanitized error evidence and optional `--endpoint developer_api`
 or `--endpoint vertex_ai`. Ambiguous errors retain uncertainty. It does not contact Google,
 inspect credential files, grant roles, enable billing, rotate keys, or change endpoints.

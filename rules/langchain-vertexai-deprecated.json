@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "rule_id": "langchain-vertexai-deprecated",
+  "rule_version": "1",
+  "documentation": "https://github.com/langchain-ai/langchain-google/discussions/1422",
+  "retrieved_on": "2026-11-01",
+  "announced_on": "2025-12-08",
+  "deprecated_package": "langchain-google-vertexai",
+  "replacement_package": "langchain-google-genai>=4.0.0",
+  "replacements": {
+    "ChatVertexAI": "ChatGoogleGenerativeAI",
+    "VertexAI": "GoogleGenerativeAI",
+    "VertexAIEmbeddings": "GoogleGenerativeAIEmbeddings"
+  },
+  "vertex_configuration": "vertexai=True with project and location, or GOOGLE_GENAI_USE_VERTEXAI=true with GOOGLE_CLOUD_PROJECT",
+  "removal": "Announced for a future release; no version or date published",
+  "repair": "detection_only",
+  "limitations": [
+    "Static imports and module attribute access only; star imports are not resolved",
+    "Other langchain-google-vertexai features (Model Garden, Vector Search, evaluation) remain supported and are not reported",
+    "No automatic rewrite: constructor arguments and credentials differ and need review"
+  ]
+}

@@ -129,6 +129,44 @@ def test_gemini_legacy_import_is_reported(source):
     assert not finding.repairable
 
 
+@pytest.mark.parametrize(
+    "source,name",
+    [
+        ("from langchain_google_vertexai import ChatVertexAI\n", "ChatVertexAI"),
+        ("from langchain_google_vertexai import VertexAIEmbeddings as E\n", "VertexAIEmbeddings"),
+        ("from langchain_google_vertexai.llms import VertexAI\n", "VertexAI"),
+        ("def build():\n    from langchain_google_vertexai import ChatVertexAI\n", "ChatVertexAI"),
+        ("import langchain_google_vertexai as lgv\nmodel = lgv.ChatVertexAI()\n", "ChatVertexAI"),
+    ],
+)
+def test_langchain_vertexai_deprecation_is_reported(source, name):
+    (finding,) = analyze_source(source, "app.py").findings
+    assert finding.rule_id == "langchain-vertexai-deprecated"
+    assert finding.provider == "langchain"
+    assert not finding.repairable
+    assert finding.evidence == [f"Resolved imported class: langchain_google_vertexai.{name}"]
+
+
+def test_langchain_deprecations_on_one_line_have_distinct_ids():
+    source = "from langchain_google_vertexai import ChatVertexAI, VertexAIEmbeddings\n"
+    findings = analyze_source(source, "app.py").findings
+    assert len({f.id for f in findings}) == 2
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from langchain_google_genai import ChatGoogleGenerativeAI\n",
+        "from langchain_google_vertexai import VectorSearchVectorStore\n",
+        "from langchain_google_vertexai import *\n",
+        "from . import ChatVertexAI\n",
+        "class ChatVertexAI:\n    pass\n",
+    ],
+)
+def test_langchain_rule_has_no_false_positives(source):
+    assert not analyze_source(source, "app.py").findings
+
+
 def test_legacy_embeddings_reported_without_repair():
     source = "import openai as oa\nresult = oa.Embedding.create(input=['test'])\n"
     analysis = analyze_source(source, "app.py")
