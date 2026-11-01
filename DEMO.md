@@ -1,84 +1,135 @@
 # apiheal demo runbook
 
-A 2–3 minute product demo: one verified SDK migration that ends in a draft GitHub PR, and one
-Gemini incident that apiheal correctly refuses to "fix" with code. All content in the demo
-repository is synthetic; say so on camera.
+A two-minute product demo. It shows apiheal finding real breakages in real repositories and
+opening a verified fix PR. Present it as an early prototype: detection covers Python and the
+rules listed in the README. Say that on camera once.
 
-## One-time setup
+## Before recording
 
-1. Docker Desktop running with Linux containers.
-2. Prepare the runner images (re-run after changing harness assets):
+1. Cache apiheal once, so recorded runs start instantly and need no `--refresh`:
 
-   ```powershell
-   .\.venv\Scripts\apiheal.exe setup-runner
+   ```bash
+   uvx --refresh --from git+https://github.com/Deekshith9238/apiheal apiheal --version
    ```
 
-3. Publish `apiheal-demo` to a GitHub repository you own, so `--pr` has a target:
+   The commands below use `apiheal` as shorthand for
+   `uvx --from git+https://github.com/Deekshith9238/apiheal apiheal`.
 
-   ```powershell
-   gh repo create apiheal-demo --public --source ..\apiheal-demo --push
+2. Clone a public repository whose source you may show on camera:
+
+   ```bash
+   git clone https://github.com/shreeprabha1217/AI_Interviewer_ ~/demo/ai-interviewer
    ```
 
-   The local baseline must equal the remote base-branch tip, and the checkout must be clean.
-   `gh` needs Contents write and Pull requests write on that repository.
+   Ask the owner before featuring it; it is a courtesy, not a requirement.
 
-## Recording script
+3. For private or employer repositories, show apiheal's text output only. Never show their
+   source, the JSON report (it lists every file path and the Git remote), or paths that name
+   the organization. Get the maintainer's permission to mention the result at all.
 
-Run each command from this project. Keep the terminal font large and clear the screen between steps.
+4. Use a terminal font of about 20pt, a dark theme, a short prompt, and a cleared screen.
 
-### 1. Detect (about 20 s)
+5. Open these browser tabs:
+   - the verified PR, [Deekshith9238/apiheal-demo#1](https://github.com/Deekshith9238/apiheal-demo/pull/1);
+   - [Gemini API deprecations](https://ai.google.dev/gemini-api/docs/deprecations).
 
-```powershell
-.\.venv\Scripts\apiheal.exe scan ..\apiheal-demo
+## Recording script (about 2 minutes)
+
+Record one segment at a time and edit them together. Scan output is real; do not stage it.
+
+### 1. The problem (0:00–0:15)
+
+Show your face or a title card.
+
+> "I lost two days to a Gemini SDK and Vertex AI migration. AI providers change SDKs, models,
+> and authentication constantly, and nobody reads the changelogs. apiheal finds these breaks
+> before they reach production."
+
+### 2. A retired model in a public project (0:15–0:45)
+
+```bash
+apiheal scan ~/demo/ai-interviewer
 ```
 
-Show: one repairable `openai-legacy-completions` finding at `app.py:8`, exit code 1.
-Say: LibCST resolves the import, so aliases are handled; matching a string alone does not count.
+Point at the `model-retired` finding, then open `backend/agent/src/agent/llm_factory.py` at
+line 35.
 
-### 2. Diagnose instead of guessing (about 30 s)
+> "This is a real open-source AI interviewer. apiheal finds it still calls `gemini-1.5-pro`,
+> which Google shut down in September 2025, so every interview call fails when it runs on
+> Gemini."
 
-```powershell
-.\.venv\Scripts\apiheal.exe diagnose ..\apiheal-demo --log ..\apiheal-demo\logs\gemini-permission.log
+### 3. Your own backend (0:45–1:15)
+
+```bash
+apiheal scan /path/to/your/backend
 ```
 
-Show: `manual_action_required`, the ranked causes, and the manual steps. Say that no PR is
-generated because a permissions problem is not a code problem. This is the incident that
-motivated apiheal.
+Show the output only. Pause on the evidence lines under each finding.
 
-### 3. Repair, verify, and open a PR (about 60 s)
+> "This is my own production backend. apiheal found LangChain classes deprecated since 3.2.0,
+> a package my Docker image never installs, and retired Gemini models. I didn't know about
+> any of them."
+
+Before recording, confirm whether each Gemini API date also applies to your Vertex AI project.
+apiheal words those findings as "may fail" for that reason, so say it the same way.
+
+### 4. A teammate's backend (1:15–1:25)
+
+Show the output only, with permission.
+
+> "A teammate's backend: eight calls to a Gemini SDK whose support ended a year ago. The
+> developer who wrote them has left the company."
+
+### 5. A verified fix (1:25–1:50)
+
+Open the PR. Scroll through the two-file diff, then the verification table.
+
+> "When a fix is safe, apiheal opens a PR, but only after proving it in a locked-down sandbox:
+> the original code passes on the old SDK and fails on the new one, and the fix passes the
+> same checks. Every check is attached as evidence."
+
+### 6. Close (1:50–2:00)
+
+> "Diagnosis first, minimal repair second, verification always, and a human approves the
+> merge."
+
+## Optional segments
+
+- **Diagnosis instead of a guess:** run `apiheal diagnose` on the demo repository's
+  `logs/gemini-permission.log`. It reports `manual_action_required` and does not open a PR,
+  because a permissions failure is not a code change.
+- **Failure path:** with an uncommitted edit in `apiheal-demo`, run
+  `apiheal repair ../apiheal-demo --verify`. It stops with a policy block (exit 3) and
+  leaves the checkout untouched. Revert the edit afterwards.
+- **Recreate the verified PR:** see "One-time PR setup" below.
+
+## One-time PR setup
+
+The PR in segment 5 already exists. To recreate it, use Windows or Linux with Docker running:
 
 ```powershell
+.\.venv\Scripts\apiheal.exe setup-runner
 .\.venv\Scripts\apiheal.exe repair ..\apiheal-demo --verify --pr
 ```
 
-Show the gate list as it passes, then point out:
+The demo repository must be clean and match its GitHub base branch. `gh` needs Contents write
+and Pull requests write on that repository.
 
-- the original code passes on `openai==0.28.1`;
-- the original code fails with `APIRemovedInV1` on `1.109.1`, which proves the break is real;
-- the repaired code passes the same contract cases, including Unicode and HTTP 400 propagation;
-- everything runs in Docker with `--network none` and no credentials.
+## Claims to keep accurate
 
-### 4. The pull request (about 30 s)
-
-Open the draft PR on GitHub. Scroll through the minimal diff (2 files), the verification
-matrix, environment identities, and the "human review required" statement.
-
-### 5. Close (about 15 s)
-
-"Diagnosis first. Minimal repair second. Verification always. Human approval before merge."
-
-## Optional: show the failure path
-
-Make an unrelated uncommitted edit in `apiheal-demo` and run `repair --verify`. apiheal stops
-with a policy block (exit 3) and leaves the checkout untouched. Revert the edit afterwards.
+- Say "prototype". Automated repair covers one OpenAI migration; the other rules detect and
+  explain.
+- The demo repository is synthetic, and its Gemini log is a sanitized stand-in for the
+  founder's incident, not the original.
+- Model shutdown dates come from a dated table bundled with apiheal (see
+  `rules/model-retired.json`). Gemini API dates are earliest dates, and Vertex AI keeps its own
+  schedule.
+- Count findings exactly: which repositories were scanned, which had findings, and which were
+  clean.
 
 ## Evidence for the application
 
-- Link to the draft PR, plus the run ID from `~/.apiheal/runs/<run-id>` (`report.md`,
-  `verification.json`, `verification-evidence.json`).
+- The draft PR link and its run ID.
 - The public apiheal repository with passing CI.
+- Scan results from the real repositories, described without naming private code.
 - Keep the product demo video separate from the founder video.
-
-Do not describe the demo as fixing a live incident. It reproduces a known migration on a synthetic
-repository; the Gemini log is a sanitized representation of the founder's incident, not the
-original.
