@@ -67,6 +67,12 @@ from `langchain-google-vertexai`, with their `langchain-google-genai` replacemen
 is detection-only; other `langchain-google-vertexai` features remain supported and are not
 reported. See `rules/langchain-vertexai-deprecated.json` for its source and limitations.
 
+Rule `model-retired` flags string literals that name a retired or scheduled-for-shutdown model
+from the Google (Gemini API and Vertex AI), OpenAI, or Anthropic deprecation pages, with the
+shutdown date and recommended replacement. Passed shutdowns are errors, those within 180 days
+are warnings, and later ones are info. The bundled table is dated; provider and platform
+schedules can differ. See `rules/model-retired.json` for sources and limitations.
+
 Gemini diagnosis uses supplied sanitized error evidence and optional `--endpoint developer_api`
 or `--endpoint vertex_ai`. Ambiguous errors retain uncertainty. It does not contact Google,
 inspect credential files, grant roles, enable billing, rotate keys, or change endpoints.

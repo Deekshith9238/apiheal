@@ -7,8 +7,12 @@ outside that subset remain visible with an explicit unsupported reason.
 import ast
 import hashlib
 import io
+import json
 import tokenize
 from dataclasses import dataclass, field
+from datetime import UTC, date, datetime
+from functools import cache
+from importlib.resources import files
 from pathlib import Path
 
 import libcst as cst
@@ -32,7 +36,27 @@ LANGCHAIN_REPLACEMENTS = {
     "VertexAI": "GoogleGenerativeAI",
     "VertexAIEmbeddings": "GoogleGenerativeAIEmbeddings",
 }
+MODEL_RULE = "model-retired"
+MODEL_KEYWORDS = {"model", "model_name", "model_id"}
+# Shutdowns further away than this are reported as info rather than warnings.
+MODEL_WARNING_DAYS = 180
+PROVIDER_NOTES = {
+    "google": "Gemini API; earliest announced date, Vertex AI schedules may differ",
+    "google_vertex": "Vertex AI",
+    "openai": "OpenAI API",
+    "anthropic": "Claude API; Bedrock and Google-managed Vertex set their own dates",
+}
 RULE = "openai-legacy-completions"
+
+
+@cache
+def retired_models() -> tuple[dict[str, dict], dict[str, str]]:
+    data = json.loads(
+        files("apiheal.detection").joinpath("data/model_retirements.json").read_text("utf-8")
+    )
+    return {row["id"]: row for row in data["models"]}, data["sources"]
+
+
 TARGETS = {
     "openai.ChatCompletion.create": RULE,
     "openai.Completion.create": RULE,
@@ -85,6 +109,20 @@ class SDKVisitor(cst.CSTVisitor):
         self.calls: list[CallSite] = []
         self.gemini: list[Span] = []
         self.langchain: list[tuple[str, Span]] = []
+        self.models: list[tuple[str, Span, bool]] = []
+        self._model_arguments: set[int] = set()
+
+    def visit_Arg(self, node: cst.Arg) -> None:
+        if node.keyword and node.keyword.value in MODEL_KEYWORDS:
+            self._model_arguments.add(id(node.value))
+
+    def visit_SimpleString(self, node: cst.SimpleString) -> None:
+        value = node.evaluated_value
+        if not isinstance(value, str):
+            return
+        model = value.removeprefix("models/")  # Gemini resource-name form.
+        if model in retired_models()[0]:
+            self.models.append((model, self._span(node), id(node) in self._model_arguments))
 
     def visit_Call(self, node: cst.Call) -> None:
         names = self.get_metadata(QualifiedNameProvider, node.func, set())
@@ -366,7 +404,54 @@ class MigrationTransformer(cst.CSTTransformer):
         )
 
 
-def analyze_source(source: str, file: str) -> SourceAnalysis:
+def _model_finding(model: str, span: Span, argument: bool, file: str, today: date) -> Finding:
+    table, sources = retired_models()
+    row = table[model]
+    shutdown = date.fromisoformat(row["shutdown"])
+    note = PROVIDER_NOTES[row["provider"]]
+    replacement = f"use {row['replacement']}" if row["replacement"] else "choose a current model"
+    if shutdown <= today and row["provider"] == "google":
+        # The Gemini API publishes earliest dates and Vertex AI runs its own schedule.
+        severity = "error"
+        message = (
+            f"Model '{model}' passed its announced shutdown date, {shutdown} ({note}); "
+            f"requests to it may fail. To fix, {replacement}."
+        )
+    elif shutdown <= today:
+        severity = "error"
+        message = (
+            f"Model '{model}' was shut down on {shutdown} ({note}); requests to it fail. "
+            f"To fix, {replacement}."
+        )
+    else:
+        days = (shutdown - today).days
+        severity = "warning" if days <= MODEL_WARNING_DAYS else "info"
+        message = (
+            f"Model '{model}' is scheduled to shut down on {shutdown}, in {days} days ({note}); "
+            f"{replacement} before then."
+        )
+    return Finding(
+        id=finding_id(f"{MODEL_RULE}.{model}", file, span.line),
+        rule_id=MODEL_RULE,
+        provider=row["provider"].removesuffix("_vertex"),
+        category="model_retirement",
+        file=file,
+        span=span,
+        severity=severity,
+        confidence="high" if argument else "medium",
+        message=message,
+        evidence=[
+            "Passed as a model argument"
+            if argument
+            else "String literal matches a model ID outside a model argument",
+            f"Provider schedule: {sources[row['provider']]}",
+        ],
+        documentation=sources[row["provider"]],
+    )
+
+
+def analyze_source(source: str, file: str, today: date | None = None) -> SourceAnalysis:
+    today = today or datetime.now(UTC).date()
     result = SourceAnalysis()
     try:
         wrapper = MetadataWrapper(cst.parse_module(source))
@@ -440,4 +525,6 @@ def analyze_source(source: str, file: str) -> SourceAnalysis:
                 documentation=LANGCHAIN_DOC,
             )
         )
+    for model, span, argument in visitor.models:
+        result.findings.append(_model_finding(model, span, argument, file, today))
     return result

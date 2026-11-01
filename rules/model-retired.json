@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "rule_id": "model-retired",
+  "rule_version": "1",
+  "retrieved_on": "2026-11-01",
+  "data": "src/apiheal/detection/data/model_retirements.json",
+  "sources": {
+    "google": "https://ai.google.dev/gemini-api/docs/deprecations",
+    "google_vertex": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
+    "openai": "https://developers.openai.com/api/docs/deprecations",
+    "anthropic": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+  },
+  "severity": {
+    "error": "Shutdown date has passed",
+    "warning": "Shutdown within 180 days",
+    "info": "Shutdown announced more than 180 days away"
+  },
+  "confidence": {
+    "high": "String passed as a model, model_name, or model_id argument",
+    "medium": "String literal elsewhere, such as a constant or list of model choices"
+  },
+  "limitations": [
+    "Exact string literals only; f-strings, concatenation, environment variables, and config files are not resolved",
+    "Covers text, chat, reasoning, moderation, and embedding models; image, video, audio, and live models are not listed",
+    "Gemini 1.0 models and gemini-1.5-flash-8b are not listed because their dates were not confirmed from an official source",
+    "Gemini 1.5 dates come from Vertex AI documentation and Google's developer forum because the Gemini API page no longer lists them",
+    "Gemini API dates are earliest possible shutdowns; Vertex AI, Amazon Bedrock, and Google-managed Claude set their own schedules",
+    "Bedrock- and Vertex-style IDs (for example anthropic.claude-...-v1:0 or claude-...@date) are not matched",
+    "The table is fixed at release; updating it requires a new apiheal release"
+  ]
+}
