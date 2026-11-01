@@ -60,8 +60,14 @@ def _execute(action: Callable[[], RunResult], fmt: OutputFormat, store: RunStore
         for finding in result.findings:
             position = f":{finding.span.line}" if finding.span else ""
             typer.echo(
-                redact_text(f"  {finding.file}{position} [{finding.rule_id}] {finding.message}")
+                redact_text(
+                    f"  {finding.file}{position} [{finding.rule_id}] "
+                    f"{finding.severity}, {finding.confidence} confidence"
+                )
             )
+            typer.echo(redact_text(f"    {finding.message}"))
+            for item in finding.evidence:
+                typer.echo(redact_text(f"    - {item}"))
         if result.diagnosis:
             diagnosis = result.diagnosis
             typer.echo(f"  {diagnosis.category} ({diagnosis.confidence} confidence)")

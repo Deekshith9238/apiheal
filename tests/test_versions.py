@@ -41,6 +41,11 @@ def test_langchain_severity_follows_declared_version(tmp_path, requirement, seve
         assert finding.message.endswith("project, and location.")
 
 
+def test_langchain_findings_carry_rule_version_two(tmp_path):
+    (finding,) = scan(tmp_path, CHAT, {})
+    assert finding.rule_version == "2"
+
+
 def test_undeclared_package_lowers_confidence(tmp_path):
     (finding,) = scan(tmp_path, CHAT, {"requirements.txt": "langchain-google-genai==4.2.2\n"})
     assert finding.confidence == "medium"

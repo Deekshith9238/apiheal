@@ -426,6 +426,7 @@ def analyze_source(source: str, file: str) -> SourceAnalysis:
                 # Several deprecated classes can share one import line.
                 id=finding_id(f"{LANGCHAIN_RULE}.{name}", file, span.line),
                 rule_id=LANGCHAIN_RULE,
+                rule_version="2",  # Version-aware grading; see the rule's JSON record.
                 provider="langchain",
                 category="deprecation",
                 file=file,

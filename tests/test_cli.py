@@ -41,6 +41,15 @@ def test_scan_returns_typed_findings_without_execution(repository, tmp_path):
     assert not is_dirty(repository)
 
 
+def test_text_scan_shows_severity_confidence_and_evidence(repository, tmp_path):
+    response = runner.invoke(app, ["scan", str(repository), "--data-dir", str(tmp_path / "runs")])
+    assert response.exit_code == 1, response.output
+    lines = response.stdout.splitlines()
+    assert lines[1].endswith("[openai-legacy-completions] warning, high confidence")
+    assert lines[2] == "    Supported legacy chat call can be migrated."
+    assert lines[3] == "    - Resolved imported call: openai.ChatCompletion.create"
+
+
 def test_dry_run_generates_diff_and_report_without_caller_edits(repository, tmp_path):
     before = (repository / "app.py").read_bytes()
     response = invoke("repair", repository, tmp_path, "--dry-run")
