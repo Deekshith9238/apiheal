@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "rule_id": "openai-legacy-completions",
+  "rule_version": "1",
+  "documentation": "https://developers.openai.com/api/reference/python",
+  "retrieved_on": "2026-10-31",
+  "source_fixture_sdk": "openai==0.28.1",
+  "target_sdk": "openai==1.109.1",
+  "behavioral_verification": "offline_three_environment_docker_contract",
+  "supported_call": "openai.ChatCompletion.create",
+  "supported_response": "response['choices'][0]['message']['content']",
+  "limitations": [
+    "Single top-level SDK import and simple synchronous function",
+    "No global SDK configuration or unrelated SDK uses",
+    "Explicit supported keyword arguments only",
+    "One root requirements.txt without conditional OpenAI requirements"
+  ]
+}

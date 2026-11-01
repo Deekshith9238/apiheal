@@ -1,0 +1,4 @@
+Representative fixture, not the founder's original incident.
+POST https://generativelanguage.googleapis.com/v1beta/models/example:generateContent
+403 PERMISSION_DENIED: Caller does not have permission.
+Authentication context: API key (value omitted)
