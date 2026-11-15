@@ -1,0 +1,12 @@
+{
+  "node16": {
+    "date": "2024-11-12",
+    "guidance": "Update the action to a release that uses a supported runtime.",
+    "source": "https://github.blog/changelog/2024-09-25-end-of-life-for-actions-node16/"
+  },
+  "node20": {
+    "date": "2026-09-23",
+    "guidance": "Update the action to a release that uses Node 24.",
+    "source": "https://github.blog/changelog/2026-09-23-node-20-is-no-longer-available-in-github-actions/"
+  }
+}

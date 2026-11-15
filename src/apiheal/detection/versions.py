@@ -12,32 +12,10 @@ from pathlib import Path
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
-from packaging.version import InvalidVersion, Version
 
 from apiheal.core.models import Finding, RepositorySnapshot
+from apiheal.detection.catalog import SDKRule, builtin_rules
 from apiheal.detection.inventory import safe_path
-
-# Bounds standing in for "every earlier/future version" of a package.
-_EARLIEST = Version("0")
-_FUTURE = Version("99999")
-
-
-@dataclass(frozen=True)
-class VersionedChange:
-    package: str
-    deprecated_since: Version | None = None
-    removed_in: Version | None = None
-
-
-CHANGES = {
-    # @deprecated(since="3.2.0", removal="4.0.0") on all three classes in
-    # langchain_google_vertexai/{chat_models,embeddings,llms}.py.
-    "langchain-vertexai-deprecated": VersionedChange(
-        "langchain-google-vertexai", Version("3.2.0"), Version("4.0.0")
-    ),
-    # The whole package is past end of support; versions only add evidence.
-    "gemini-old-sdk": VersionedChange("google-generativeai"),
-}
 
 
 @dataclass(frozen=True)
@@ -91,31 +69,36 @@ def _pyproject_entries(text: str) -> list[str]:
         project = tomllib.loads(text).get("project", {})
     except tomllib.TOMLDecodeError:
         return []
-    entries = list(project.get("dependencies", []))
-    for group in project.get("optional-dependencies", {}).values():
-        entries.extend(group)
+    if not isinstance(project, dict):
+        return []
+    dependencies = project.get("dependencies", [])
+    entries = list(dependencies) if isinstance(dependencies, list) else []
+    extras = project.get("optional-dependencies", {})
+    if isinstance(extras, dict):
+        for group in extras.values():
+            if isinstance(group, list):
+                entries.extend(group)
     return [entry for entry in entries if isinstance(entry, str)]
 
 
-def _reachable(specifier: SpecifierSet, change: VersionedChange) -> list[Version]:
-    candidates = {_EARLIEST, _FUTURE}
-    candidates.update(v for v in (change.deprecated_since, change.removed_in) if v)
-    for spec in specifier:
-        try:
-            candidates.add(Version(spec.version.removesuffix(".*")))
-        except InvalidVersion:
-            continue
-    return sorted(v for v in candidates if specifier.contains(v, prereleases=True))
-
-
-def apply_versions(findings: list[Finding], declared: dict[str, list[Declaration]]) -> None:
+def apply_versions(
+    findings: list[Finding],
+    declared: dict[str, list[Declaration]],
+    rules: tuple[SDKRule, ...] | None = None,
+) -> None:
+    changes = {
+        rule.id: rule.dependency
+        for rule in (rules if rules is not None else builtin_rules())
+        if rule.dependency is not None
+    }
     for finding in findings:
-        change = CHANGES.get(finding.rule_id)
+        change = changes.get(finding.rule_id)
         if not change:
             continue
         declarations = declared.get(canonicalize_name(change.package), [])
         if not declarations:
-            finding.confidence = "medium"
+            if finding.confidence == "high":
+                finding.confidence = "medium"
             finding.evidence.append(
                 f"No requirements*.txt or pyproject.toml declares {change.package}; "
                 "the installed version is unknown and the import fails if it is absent."
@@ -124,22 +107,30 @@ def apply_versions(findings: list[Finding], declared: dict[str, list[Declaration
         finding.evidence.extend(f"Declared {change.package}: {d.describe()}" for d in declarations)
         if not change.deprecated_since:
             continue
-        reachable = sorted({v for d in declarations for v in _reachable(d.specifier, change)})
-        if not reachable:
+        deprecated = SpecifierSet(f">={change.deprecated_since}")
+        removed = SpecifierSet(f">={change.removed_in}") if change.removed_in else None
+        constraints = [declaration.specifier for declaration in declarations]
+        try:
+            satisfiable = [spec for spec in constraints if not spec.is_unsatisfiable()]
+            if not satisfiable:
+                continue
+            before_deprecation = all(spec.is_disjoint(deprecated) for spec in satisfiable)
+            always_removed = removed and all(spec.is_subset(removed) for spec in satisfiable)
+            allows_removal = removed and any(not spec.is_disjoint(removed) for spec in satisfiable)
+        except ValueError:
+            # Arbitrary equality (===) cannot be classified by PEP 440 range relations.
             continue
-        lowest, highest = reachable[0], reachable[-1]
-        removed = change.removed_in
-        if removed and lowest >= removed:
+        if always_removed:
             finding.severity = "error"
             finding.message += (
-                f" Every declared version is {removed} or later, where it is removed."
+                f" Every declared version is {change.removed_in} or later, where it is removed."
             )
-        elif removed and highest >= removed:
+        elif allows_removal:
             finding.message += (
-                f" The declared constraint allows {removed} or later, where the import fails; "
-                f"pin below {removed} or migrate."
+                f" The declared constraint allows {change.removed_in} or later, "
+                f"where the import fails; pin below {change.removed_in} or migrate."
             )
-        elif highest < change.deprecated_since:
+        elif before_deprecation:
             finding.severity = "info"
             finding.message += (
                 f" The declared version predates the {change.deprecated_since} deprecation; "

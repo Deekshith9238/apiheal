@@ -25,6 +25,8 @@ def scan(tmp_path: Path, source: str, manifests: dict[str, str]):
         ("langchain-google-vertexai~=3.1.0", "info", "predates the 3.2.0 deprecation"),
         ("langchain-google-vertexai==3.2.5", "warning", None),
         ("langchain-google-vertexai>=3.2,<4", "warning", None),
+        ("langchain-google-vertexai>=3.1,<4,!=3.2.0", "warning", None),
+        ("langchain-google-vertexai>4,<4.2", "error", "where it is removed"),
         ("langchain-google-vertexai", "warning", "allows 4.0.0 or later"),
         ("langchain_google_vertexai>=3.0", "warning", "allows 4.0.0 or later"),
         ("langchain-google-vertexai==4.0.1", "error", "where it is removed"),
@@ -85,3 +87,8 @@ def test_gemini_finding_gains_declared_version_evidence(tmp_path):
     (finding,) = scan(tmp_path, source, {"requirements.txt": "google-generativeai==0.8.6\n"})
     assert finding.severity == "warning"
     assert "Declared google-generativeai: ==0.8.6 in requirements.txt" in finding.evidence
+
+
+def test_invalid_project_table_keeps_scanning(tmp_path):
+    (finding,) = scan(tmp_path, CHAT, {"pyproject.toml": "project = 'invalid'\n"})
+    assert finding.confidence == "medium"

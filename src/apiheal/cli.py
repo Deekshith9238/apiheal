@@ -109,10 +109,13 @@ def scan(
     data_dir: Annotated[
         Path | None, typer.Option(help="Run storage outside the target checkout.")
     ] = None,
+    rule_pack: Annotated[
+        list[Path] | None, typer.Option(help="Load an additional JSON SDK rule pack. Repeatable.")
+    ] = None,
 ):
     """Statically find legacy SDK patterns without importing target code."""
     store = RunStore(data_dir)
-    _execute(lambda: orchestrator.scan(repository, store), format, store)
+    _execute(lambda: orchestrator.scan(repository, store, tuple(rule_pack or ())), format, store)
 
 
 @app.command()

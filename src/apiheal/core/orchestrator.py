@@ -14,8 +14,15 @@ from apiheal.core.models import CheckResult, Outcome, RepairPlan, RunResult, utc
 from apiheal.core.policy import Policy, required_checks_pass
 from apiheal.core.run_store import RunStore
 from apiheal.core.worktree import IsolatedWorktree
+from apiheal.detection.catalog import SDKRule, load_rules
 from apiheal.detection.inventory import inventory, safe_path
-from apiheal.detection.python_cst import RULE, SourceAnalysis, analyze_source, read_source
+from apiheal.detection.python_cst import (
+    OPENAI_MIGRATION_RULES,
+    RULE,
+    SourceAnalysis,
+    analyze_source,
+    read_source,
+)
 from apiheal.detection.versions import apply_versions, declared_requirements
 from apiheal.diagnosis.gemini_auth import diagnose_gemini
 from apiheal.integrations.github import pr_body, publish
@@ -23,7 +30,12 @@ from apiheal.repair.dependency_edit import TARGET_OPENAI, migrate_requirements
 from apiheal.verification.runner import verify_candidate
 
 
-def _scan(result: RunResult, repository: Path, store: RunStore) -> dict[str, SourceAnalysis]:
+def _scan(
+    result: RunResult,
+    repository: Path,
+    store: RunStore,
+    rules: tuple[SDKRule, ...] | None = None,
+) -> dict[str, SourceAnalysis]:
     root = repository_root(repository)
     store.ensure_outside(root)
     result.repository = inventory(root)
@@ -33,7 +45,7 @@ def _scan(result: RunResult, repository: Path, store: RunStore) -> dict[str, Sou
         path = safe_path(root, relative)
         try:
             source, _ = read_source(path)
-            analysis = analyze_source(source, relative)
+            analysis = analyze_source(source, relative, rules=rules)
         except (OSError, UnicodeError, SyntaxError) as exc:
             result.repository.warnings.append(
                 f"Could not analyze {relative} ({type(exc).__name__})."
@@ -41,13 +53,13 @@ def _scan(result: RunResult, repository: Path, store: RunStore) -> dict[str, Sou
             continue
         analyses[relative] = analysis
         result.findings.extend(analysis.findings)
-    apply_versions(result.findings, declared_requirements(root, result.repository))
+    apply_versions(result.findings, declared_requirements(root, result.repository), rules)
     return analyses
 
 
-def scan(repository: Path, store: RunStore) -> RunResult:
+def scan(repository: Path, store: RunStore, rule_packs: tuple[Path, ...] = ()) -> RunResult:
     result = RunResult(command="scan")
-    _scan(result, repository, store)
+    _scan(result, repository, store, load_rules(rule_packs))
     if result.findings:
         result.outcome = Outcome.FINDINGS
     elif result.repository.warnings or result.repository.skipped:
@@ -125,10 +137,12 @@ def repair(
                 ):
                     result.outcome = Outcome.UNSUPPORTED
                     result.message = "Scan was incomplete; inspect warnings and skipped paths."
-            elif any(not f.repairable for f in relevant):
+            elif any(
+                not f.repairable for f in result.findings if f.rule_id in OPENAI_MIGRATION_RULES
+            ):
                 result.outcome = Outcome.UNSUPPORTED
                 result.message = (
-                    "At least one matching call requires manual review; no patch generated."
+                    "A legacy OpenAI call requires manual review before upgrading the SDK."
                 )
             else:
                 if (

@@ -24,18 +24,8 @@ from libcst.metadata import (
 )
 
 from apiheal.core.models import Finding, Span
+from apiheal.detection.catalog import SDKRule, Selector, builtin_rules
 
-OPENAI_DOC = "https://developers.openai.com/api/reference/python"
-GEMINI_DOC = "https://ai.google.dev/gemini-api/docs/libraries"
-LANGCHAIN_DOC = "https://github.com/langchain-ai/langchain-google/discussions/1422"
-LANGCHAIN_RULE = "langchain-vertexai-deprecated"
-LANGCHAIN_MODULE = "langchain_google_vertexai"
-# Deprecated with the langchain-google-genai 4.0.0 release (announced 2025-12-08).
-LANGCHAIN_REPLACEMENTS = {
-    "ChatVertexAI": "ChatGoogleGenerativeAI",
-    "VertexAI": "GoogleGenerativeAI",
-    "VertexAIEmbeddings": "GoogleGenerativeAIEmbeddings",
-}
 MODEL_RULE = "model-retired"
 MODEL_KEYWORDS = {"model", "model_name", "model_id"}
 # Shutdowns further away than this are reported as info rather than warnings.
@@ -47,6 +37,7 @@ PROVIDER_NOTES = {
     "anthropic": "Claude API; Bedrock and Google-managed Vertex set their own dates",
 }
 RULE = "openai-legacy-completions"
+OPENAI_MIGRATION_RULES = {RULE, "openai-legacy-embeddings"}
 
 
 @cache
@@ -57,11 +48,6 @@ def retired_models() -> tuple[dict[str, dict], dict[str, str]]:
     return {row["id"]: row for row in data["models"]}, data["sources"]
 
 
-TARGETS = {
-    "openai.ChatCompletion.create": RULE,
-    "openai.Completion.create": RULE,
-    "openai.Embedding.create": "openai-legacy-embeddings",
-}
 ALLOWED_ARGUMENTS = {
     "model",
     "messages",
@@ -89,11 +75,12 @@ def finding_id(rule: str, file: str, line: int) -> str:
 
 
 @dataclass
-class CallSite:
-    node: cst.Call
+class SDKMatch:
+    rule: SDKRule
+    selector: Selector
     name: str
     span: Span
-    ambiguous: bool = False
+    ambiguous: bool
 
 
 @dataclass
@@ -105,10 +92,13 @@ class SourceAnalysis:
 class SDKVisitor(cst.CSTVisitor):
     METADATA_DEPENDENCIES = (QualifiedNameProvider, PositionProvider)
 
-    def __init__(self):
-        self.calls: list[CallSite] = []
-        self.gemini: list[Span] = []
-        self.langchain: list[tuple[str, Span]] = []
+    def __init__(self, rules: tuple[SDKRule, ...]):
+        self.matches: list[SDKMatch] = []
+        self.selectors: dict[tuple[str, str], list[tuple[SDKRule, Selector]]] = {}
+        for rule in rules:
+            for selector in rule.selectors:
+                root = selector.module.split(".", 1)[0]
+                self.selectors.setdefault((selector.kind, root), []).append((rule, selector))
         self.models: list[tuple[str, Span, bool]] = []
         self._model_arguments: set[int] = set()
 
@@ -124,72 +114,45 @@ class SDKVisitor(cst.CSTVisitor):
         if model in retired_models()[0]:
             self.models.append((model, self._span(node), id(node) in self._model_arguments))
 
-    def visit_Call(self, node: cst.Call) -> None:
-        names = self.get_metadata(QualifiedNameProvider, node.func, set())
-        # A local binding may replace the SDK entirely. Do not report that
-        # object's methods as a confirmed imported SDK call.
+    def _match(self, kind: str, names: list[str], node: cst.CSTNode, ambiguous=False) -> None:
+        matched = set()
+        for name in names:
+            root = name.split(".", 1)[0]
+            for rule, selector in self.selectors.get((kind, root), ()):
+                key = (rule.id, selector.module, selector.name)
+                if key not in matched and selector.matches(name):
+                    matched.add(key)
+                    self.matches.append(SDKMatch(rule, selector, name, self._span(node), ambiguous))
+
+    def _match_usage(self, kind: str, expression: cst.BaseExpression, node: cst.CSTNode) -> None:
+        names = self.get_metadata(QualifiedNameProvider, expression, set())
         if any(name.source != QualifiedNameSource.IMPORT for name in names):
             return
-        imported = sorted(
-            (
-                name
-                for name in names
-                if name.source == QualifiedNameSource.IMPORT and name.name in TARGETS
-            ),
-            key=lambda name: name.name,
-        )
-        if not imported:
-            return
-        name = imported[0]
-        pos = self.get_metadata(PositionProvider, node)
-        self.calls.append(
-            CallSite(
-                node,
-                name.name,
-                Span(
-                    line=pos.start.line,
-                    column=pos.start.column,
-                    end_line=pos.end.line,
-                    end_column=pos.end.column,
-                ),
-                ambiguous=len(names) != 1,
-            )
-        )
+        self._match(kind, sorted(name.name for name in names), node, ambiguous=len(names) > 1)
+
+    def visit_Call(self, node: cst.Call) -> None:
+        self._match_usage("call", node.func, node)
 
     def visit_Import(self, node: cst.Import) -> None:
-        if any(
-            cst.helpers.get_full_name_for_node(a.name) == "google.generativeai" for a in node.names
-        ):
-            self.gemini.append(self._span(node))
+        names = [cst.helpers.get_full_name_for_node(alias.name) for alias in node.names]
+        self._match("module", [name for name in names if name], node)
 
     def visit_ImportFrom(self, node: cst.ImportFrom) -> None:
-        # Relative imports have no module and never name an installed SDK.
-        module = cst.helpers.get_full_name_for_node(node.module) if node.module else None
-        if module == "google.generativeai" or (
-            module == "google"
-            and not isinstance(node.names, cst.ImportStar)
-            and any(
-                cst.helpers.get_full_name_for_node(a.name) == "generativeai" for a in node.names
-            )
-        ):
-            self.gemini.append(self._span(node))
-        if _langchain_module(module) and not isinstance(node.names, cst.ImportStar):
-            for alias in node.names:
-                name = cst.helpers.get_full_name_for_node(alias.name)
-                if name in LANGCHAIN_REPLACEMENTS:
-                    self.langchain.append((name, self._span(node)))
+        if node.relative or node.module is None:
+            return
+        module = cst.helpers.get_full_name_for_node(node.module)
+        if module is None:
+            return
+        names = []
+        if not isinstance(node.names, cst.ImportStar):
+            names = [
+                f"{module}.{cst.helpers.get_full_name_for_node(alias.name)}" for alias in node.names
+            ]
+        self._match("module", [module, *names], node)
+        self._match("symbol", names, node)
 
     def visit_Attribute(self, node: cst.Attribute) -> None:
-        # Module-style use, e.g. `import langchain_google_vertexai as lgv; lgv.ChatVertexAI`.
-        for qualified in self.get_metadata(QualifiedNameProvider, node, set()):
-            module, _, name = qualified.name.rpartition(".")
-            if (
-                qualified.source == QualifiedNameSource.IMPORT
-                and name in LANGCHAIN_REPLACEMENTS
-                and _langchain_module(module)
-            ):
-                self.langchain.append((name, self._span(node)))
-                return
+        self._match_usage("symbol", node, node)
 
     def _span(self, node: cst.CSTNode) -> Span:
         pos = self.get_metadata(PositionProvider, node)
@@ -199,12 +162,6 @@ class SDKVisitor(cst.CSTVisitor):
             end_line=pos.end.line,
             end_column=pos.end.column,
         )
-
-
-def _langchain_module(module: str | None) -> bool:
-    return module is not None and (
-        module == LANGCHAIN_MODULE or module.startswith(f"{LANGCHAIN_MODULE}.")
-    )
 
 
 def _unique_name(base: str, names: set[str]) -> str:
@@ -217,7 +174,7 @@ def _unique_name(base: str, names: set[str]) -> str:
     return name
 
 
-def _function_for_call(tree: ast.Module, site: CallSite, source: str) -> tuple | str:
+def _function_for_call(tree: ast.Module, site: SDKMatch, source: str) -> tuple | str:
     for function in tree.body:
         if not isinstance(function, ast.FunctionDef):
             continue
@@ -261,13 +218,13 @@ def _function_for_call(tree: ast.Module, site: CallSite, source: str) -> tuple |
 
 
 def _migration(
-    wrapper: MetadataWrapper, visitor: SDKVisitor, source: str
+    wrapper: MetadataWrapper, calls: list[SDKMatch], source: str
 ) -> tuple[str | None, str]:
-    if not visitor.calls:
+    if not calls:
         return None, ""
-    if any(site.ambiguous for site in visitor.calls):
+    if any(site.ambiguous for site in calls):
         return None, "Ambiguous import bindings require manual review."
-    if any(site.name != "openai.ChatCompletion.create" for site in visitor.calls):
+    if any(site.name != "openai.ChatCompletion.create" for site in calls):
         return None, "This release only repairs synchronous legacy ChatCompletion calls."
     tree = ast.parse(source)
     if any(
@@ -298,10 +255,10 @@ def _migration(
         return None, "A single top-level OpenAI import is required by the first codemod."
     statement, binding = imports[0]
     uses = [n for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id == binding]
-    if len(uses) != len(visitor.calls):
+    if len(uses) != len(calls):
         return None, "Additional SDK uses, shadowing, or global configuration require review."
     functions = {}
-    for site in visitor.calls:
+    for site in calls:
         match = _function_for_call(tree, site, source)
         if isinstance(match, str):
             return None, match
@@ -323,7 +280,7 @@ def _migration(
     client_import = _unique_name("_apiheal_OpenAI", names)
     client_variable = _unique_name("_apiheal_client", names)
     transformer = MigrationTransformer(
-        {(s.span.line, s.span.column) for s in visitor.calls},
+        {(s.span.line, s.span.column) for s in calls},
         functions,
         (statement.lineno, statement.col_offset),
         client_import,
@@ -450,14 +407,20 @@ def _model_finding(model: str, span: Span, argument: bool, file: str, today: dat
     )
 
 
-def analyze_source(source: str, file: str, today: date | None = None) -> SourceAnalysis:
+def analyze_source(
+    source: str,
+    file: str,
+    today: date | None = None,
+    rules: tuple[SDKRule, ...] | None = None,
+) -> SourceAnalysis:
     today = today or datetime.now(UTC).date()
     result = SourceAnalysis()
     try:
         wrapper = MetadataWrapper(cst.parse_module(source))
-        visitor = SDKVisitor()
+        visitor = SDKVisitor(rules if rules is not None else builtin_rules())
         wrapper.visit(visitor)
-        migrated, reason = _migration(wrapper, visitor, source)
+        calls = [match for match in visitor.matches if match.rule.id in OPENAI_MIGRATION_RULES]
+        migrated, reason = _migration(wrapper, calls, source)
     except (cst.ParserSyntaxError, SyntaxError, ValueError, RecursionError) as exc:
         result.findings.append(
             Finding(
@@ -472,57 +435,35 @@ def analyze_source(source: str, file: str, today: date | None = None) -> SourceA
         )
         return result
     result.migrated_source = migrated
-    for site in visitor.calls:
-        rule = TARGETS[site.name]
+    for match in visitor.matches:
+        rule, selector = match.rule, match.selector
+        migration_rule = rule.id in OPENAI_MIGRATION_RULES
+        repairable = migration_rule and migrated is not None
+        message = selector.message
+        if repairable:
+            message = "Supported legacy chat call can be migrated."
+        elif migration_rule:
+            message = reason or message
+        evidence = selector.evidence
+        if evidence is None and selector.kind != "module":
+            prefix = "Possible" if match.ambiguous else "Resolved"
+            evidence = f"{prefix} imported {selector.kind}: {match.name}"
+        key = f"{rule.id}.{match.name}.{match.span.column}"
         result.findings.append(
             Finding(
-                id=finding_id(rule, file, site.span.line),
-                rule_id=rule,
-                provider="openai",
-                category="sdk_migration",
+                id=finding_id(key, file, match.span.line),
+                rule_id=rule.id,
+                rule_version=rule.version,
+                provider=rule.provider,
+                category=rule.category,
                 file=file,
-                span=site.span,
-                confidence="low" if site.ambiguous else "high",
-                repairable=migrated is not None,
-                message=("Supported legacy chat call can be migrated." if migrated else reason),
-                evidence=[
-                    f"{'Possible' if site.ambiguous else 'Resolved'} imported call: {site.name}"
-                ],
-                documentation=OPENAI_DOC,
-            )
-        )
-    for span in visitor.gemini:
-        result.findings.append(
-            Finding(
-                id=finding_id("gemini-old-sdk", file, span.line),
-                rule_id="gemini-old-sdk",
-                provider="gemini",
-                category="sdk_migration",
-                file=file,
-                span=span,
-                message="Legacy Gemini SDK import found; automatic migration is not yet supported.",
-                documentation=GEMINI_DOC,
-            )
-        )
-    for name, span in visitor.langchain:
-        replacement = LANGCHAIN_REPLACEMENTS[name]
-        result.findings.append(
-            Finding(
-                # Several deprecated classes can share one import line.
-                id=finding_id(f"{LANGCHAIN_RULE}.{name}", file, span.line),
-                rule_id=LANGCHAIN_RULE,
-                rule_version="2",  # Version-aware grading; see the rule's JSON record.
-                provider="langchain",
-                category="deprecation",
-                file=file,
-                span=span,
-                message=(
-                    f"{name} (langchain-google-vertexai) is deprecated since 3.2.0 and removed "
-                    f"in 4.0.0; use {replacement} from langchain-google-genai>=4.0.0, which "
-                    "reaches Vertex AI with vertexai=True, project, and location."
-                ),
-                evidence=[f"Resolved imported class: {LANGCHAIN_MODULE}.{name}"],
-                documentation=LANGCHAIN_DOC,
+                span=match.span,
+                severity=rule.severity,
+                confidence="low" if match.ambiguous else "high",
+                repairable=repairable,
+                message=message,
+                evidence=[evidence] if evidence else [],
+                documentation=rule.documentation,
             )
         )
     for model, span, argument in visitor.models:

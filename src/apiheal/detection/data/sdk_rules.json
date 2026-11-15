@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "rules": [
+    {
+      "id": "openai-legacy-completions",
+      "version": "1",
+      "provider": "openai",
+      "category": "sdk_migration",
+      "documentation": "https://developers.openai.com/api/reference/python",
+      "selectors": [
+        {
+          "kind": "call",
+          "module": "openai",
+          "name": "ChatCompletion.create",
+          "message": "This release only repairs synchronous legacy ChatCompletion calls."
+        },
+        {
+          "kind": "call",
+          "module": "openai",
+          "name": "Completion.create",
+          "message": "This release only repairs synchronous legacy ChatCompletion calls."
+        }
+      ]
+    },
+    {
+      "id": "openai-legacy-embeddings",
+      "version": "1",
+      "provider": "openai",
+      "category": "sdk_migration",
+      "documentation": "https://developers.openai.com/api/reference/python",
+      "selectors": [
+        {
+          "kind": "call",
+          "module": "openai",
+          "name": "Embedding.create",
+          "message": "This release only repairs synchronous legacy ChatCompletion calls."
+        }
+      ]
+    },
+    {
+      "id": "gemini-old-sdk",
+      "version": "1",
+      "provider": "gemini",
+      "category": "sdk_migration",
+      "documentation": "https://ai.google.dev/gemini-api/docs/libraries",
+      "dependency": {
+        "package": "google-generativeai"
+      },
+      "selectors": [
+        {
+          "kind": "module",
+          "module": "google.generativeai",
+          "message": "Legacy Gemini SDK import found; automatic migration is not yet supported."
+        }
+      ]
+    },
+    {
+      "id": "langchain-vertexai-deprecated",
+      "version": "2",
+      "provider": "langchain",
+      "category": "deprecation",
+      "documentation": "https://github.com/langchain-ai/langchain-google/discussions/1422",
+      "dependency": {
+        "package": "langchain-google-vertexai",
+        "deprecated_since": "3.2.0",
+        "removed_in": "4.0.0"
+      },
+      "selectors": [
+        {
+          "kind": "symbol",
+          "module": "langchain_google_vertexai",
+          "name": "ChatVertexAI",
+          "submodules": true,
+          "message": "ChatVertexAI (langchain-google-vertexai) is deprecated since 3.2.0 and removed in 4.0.0; use ChatGoogleGenerativeAI from langchain-google-genai>=4.0.0, which reaches Vertex AI with vertexai=True, project, and location.",
+          "evidence": "Resolved imported class: langchain_google_vertexai.ChatVertexAI"
+        },
+        {
+          "kind": "symbol",
+          "module": "langchain_google_vertexai",
+          "name": "VertexAI",
+          "submodules": true,
+          "message": "VertexAI (langchain-google-vertexai) is deprecated since 3.2.0 and removed in 4.0.0; use GoogleGenerativeAI from langchain-google-genai>=4.0.0, which reaches Vertex AI with vertexai=True, project, and location.",
+          "evidence": "Resolved imported class: langchain_google_vertexai.VertexAI"
+        },
+        {
+          "kind": "symbol",
+          "module": "langchain_google_vertexai",
+          "name": "VertexAIEmbeddings",
+          "submodules": true,
+          "message": "VertexAIEmbeddings (langchain-google-vertexai) is deprecated since 3.2.0 and removed in 4.0.0; use GoogleGenerativeAIEmbeddings from langchain-google-genai>=4.0.0, which reaches Vertex AI with vertexai=True, project, and location.",
+          "evidence": "Resolved imported class: langchain_google_vertexai.VertexAIEmbeddings"
+        }
+      ]
+    }
+  ]
+}

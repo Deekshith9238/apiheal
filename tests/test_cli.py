@@ -220,3 +220,77 @@ def test_setup_runner_missing_docker_is_an_actionable_json_error(monkeypatch):
     response = runner.invoke(app, ["setup-runner", "--format", "json"])
     assert response.exit_code == 4
     assert "Docker CLI is unavailable" in json.loads(response.stdout)["error"]
+
+
+def test_scan_loads_declarative_rule_pack(repository, tmp_path):
+    source = (
+        "import example_sdk as sdk\n"
+        "sdk.old.run()\n"
+        "from example_sdk import LegacyClient\n"
+        "from .example_sdk import LegacyClient\n"
+        "import example_sdk.deprecated\n"
+    )
+    (repository / "custom.py").write_text(source, encoding="utf-8")
+    requirements = repository / "requirements.txt"
+    requirements.write_text("openai==0.28.1\nexample-sdk==2.1\n", encoding="utf-8")
+    rule = {
+        "id": "example-sdk-deprecated",
+        "version": "3",
+        "provider": "example",
+        "category": "deprecation",
+        "documentation": "https://example.invalid/migration",
+        "dependency": {"package": "example-sdk", "deprecated_since": "1", "removed_in": "2"},
+        "selectors": [
+            {"kind": "call", "module": "example_sdk", "name": "old.run", "message": "Use new.run."},
+            {
+                "kind": "symbol",
+                "module": "example_sdk",
+                "name": "LegacyClient",
+                "message": "Use NewClient.",
+            },
+            {
+                "kind": "module",
+                "module": "example_sdk.deprecated",
+                "message": "Use the new module.",
+            },
+        ],
+    }
+    pack = tmp_path / "sdk-rules.json"
+    pack.write_text(json.dumps({"schema_version": 1, "rules": [rule]}), encoding="utf-8")
+
+    default = invoke("scan", repository, tmp_path)
+    assert {f["rule_id"] for f in json.loads(default.stdout)["findings"]} == {
+        "openai-legacy-completions"
+    }
+
+    response = invoke("scan", repository, tmp_path, "--rule-pack", str(pack))
+    assert response.exit_code == 1, response.output
+    findings = json.loads(response.stdout)["findings"]
+    assert any(f["rule_id"] == "openai-legacy-completions" for f in findings)
+    custom = [f for f in findings if f["rule_id"] == rule["id"]]
+    assert [f["span"]["line"] for f in custom] == [2, 3, 5]
+    assert all(
+        f["rule_version"] == "3" and f["severity"] == "error" and not f["repairable"]
+        for f in custom
+    )
+
+    for rule_id in ("openai-legacy-completions", "model-retired"):
+        rule["id"] = rule_id
+        pack.write_text(json.dumps({"schema_version": 1, "rules": [rule]}), encoding="utf-8")
+        rejected = invoke("scan", repository, tmp_path, "--rule-pack", str(pack))
+        assert rejected.exit_code == 2
+        assert "Duplicate or reserved rule ID" in json.loads(rejected.stdout)["error"]
+
+
+def test_repair_blocks_dependency_upgrade_with_legacy_embeddings(repository, tmp_path):
+    (repository / "embeddings.py").write_text(
+        "import openai\nopenai.Embedding.create(input=['text'])\n", encoding="utf-8"
+    )
+    git(repository, "add", "embeddings.py")
+    git(repository, "-c", "commit.gpgsign=false", "commit", "-m", "Add legacy embeddings")
+    response = invoke("repair", repository, tmp_path, "--dry-run")
+    assert response.exit_code == 1, response.output
+    result = json.loads(response.stdout)
+    assert result["outcome"] == "unsupported"
+    assert result["patch"] is None
+    assert not is_dirty(repository)

@@ -10,6 +10,50 @@ failed checks, and indeterminate checks block verification and publishing. Targe
 runs on the developer host as a fallback. The container runner is intended for reviewed demo
 repositories; hardened infrastructure for arbitrary hostile external repositories is future work.
 
+## GitHub App pilot
+
+The app posts an advisory **apiheal / Deprecations** check on a pull request's head commit.
+It scans changed files against their merge-base versions and annotates new findings.
+
+| Detector | Source |
+| --- | --- |
+| npm dependencies | Live public npm registry metadata for newly added exact versions in v2/v3 npm lockfiles |
+| GitHub Actions | Action metadata at the referenced tag or commit, compared with GitHub runtime retirement notices |
+| Python | Existing static SDK and model detectors on changed Python source files |
+
+### Register and run
+
+1. [Register a GitHub App](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app).
+   Grant repository **Contents: Read**, **Pull requests: Read**, and **Checks: Read and write**.
+   Subscribe to **Pull request** events. Set the webhook URL to
+   `https://YOUR_HOST/webhooks/github`, set a webhook secret, and generate a private key.
+2. Install the app on a pilot repository. Deploy the service behind HTTPS with a single
+   process and store the key and webhook secret in your host's secret manager.
+3. Set the environment variables below, start the service, and open or update a test PR.
+
+```sh
+uv sync --locked --extra app
+export GITHUB_APP_ID=123456
+export GITHUB_APP_PRIVATE_KEY_FILE=/path/to/github-app.private-key.pem
+export APIHEAL_APP_HOST=0.0.0.0
+# Inject GITHUB_WEBHOOK_SECRET through your environment or secret manager.
+uv run --locked --extra app apiheal-app
+```
+
+The service listens on port 8000 by default and exposes `GET /healthz`.
+The PR check can run with read access to repository contents. It does not install packages,
+run repository code, or modify branches. It contacts the public npm registry only for
+lockfile entries explicitly resolved there. External action metadata is fetched anonymously
+from GitHub; inaccessible actions surface as a coverage limit.
+
+This pilot covers changed PR files and uses an in-memory queue. Redeliver failed webhooks
+from GitHub after restoring service. Scheduled default-branch rescans, a durable queue,
+private registries, other package managers, and broader language analysis are future work.
+Python findings use source patterns without grading installed dependency versions in the
+GitHub check. The local CLI continues to support manifest-based grading.
+
+Run the app tests with `uv run --locked --extra dev --extra app pytest tests/test_github_app.py`.
+
 ## Install
 
 Requires Python 3.11+ and Git. From this project:
@@ -76,6 +120,56 @@ schedules can differ. See `rules/model-retired.json` for sources and limitations
 Gemini diagnosis uses supplied sanitized error evidence and optional `--endpoint developer_api`
 or `--endpoint vertex_ai`. Ambiguous errors retain uncertainty. It does not contact Google,
 inspect credential files, grant roles, enable billing, rotate keys, or change endpoints.
+
+## Add SDK detection rules
+
+```sh
+apiheal scan /path/to/repo --rule-pack /path/to/sdk-rules.json --format json
+```
+
+Pass `--rule-pack` once per file. Packs are explicitly selected, validated JSON files
+that extend the [built-in SDK catalog](src/apiheal/detection/data/sdk_rules.json).
+Each rule needs a unique ID. Built-in IDs cannot be overridden.
+
+```json
+{
+  "schema_version": 1,
+  "rules": [
+    {
+      "id": "example-legacy-client",
+      "version": "1",
+      "provider": "example",
+      "category": "deprecation",
+      "documentation": "https://example.com/sdk/migration",
+      "dependency": {
+        "package": "example-sdk",
+        "deprecated_since": "2.0",
+        "removed_in": "3.0"
+      },
+      "selectors": [
+        {
+          "kind": "symbol",
+          "module": "example_sdk",
+          "name": "LegacyClient",
+          "message": "Replace LegacyClient with Client."
+        }
+      ]
+    }
+  ]
+}
+```
+
+- `module` matches imports of a module and takes no `name`.
+- `symbol` matches direct imports and qualified attribute references.
+- `call` matches calls resolved to an import and accepts dotted names such as `Client.create`.
+- Set `submodules` to `true` to include descendants of the named module. Matching uses
+  static import resolution, including aliases.
+- Optional `dependency` metadata grades findings against declared version ranges in
+  `requirements*.txt` and PEP 621 `pyproject.toml`. These ranges describe what can be
+  installed. Reports do not resolve the installed environment or lockfiles.
+
+Custom packs extend scanning only. Repair continues to use the built-in OpenAI codemod
+and its verification gates. Model shutdown dates use the separate bundled retirement table.
 
 ## Exit statuses
 

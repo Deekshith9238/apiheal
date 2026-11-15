@@ -10,16 +10,18 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "libcst>=1.8,<2",
-  "packaging>=24,<27",
+  "packaging>=26.3,<27",
   "pydantic>=2.10,<3",
   "typer>=0.16,<1",
 ]
 
 [project.optional-dependencies]
+app = ["httpx>=0.28,<1", "PyJWT[crypto]>=2.10,<3", "PyYAML>=6,<7", "uvicorn>=0.34,<1"]
 dev = ["pytest>=8.3,<10", "ruff>=0.12,<1"]
 
 [project.scripts]
 apiheal = "apiheal.cli:main"
+apiheal-app = "apiheal.github_app.webhook:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/apiheal"]
